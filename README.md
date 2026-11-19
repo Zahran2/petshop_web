@@ -70,10 +70,10 @@ petshop_web/
 
 Saat pertama kali dijalankan, sistem otomatis membuat dua akun bawaan:
 
-| Peran (Role) | Username | PIN Default | Hak Akses |
+| Peran (Role) | Username | Hak Akses |
 | :--- | :--- | :--- | :--- |
-| **Admin / Pemilik** | `admin` | `1234` | Semua menu (Kasir, Stok, Riwayat, Dashboard, Retur) |
-| **Kasir / Karyawan** | `kasir` | `0000` | Hanya menu Kasir |
+| **Admin / Pemilik** | `admin` | Semua menu (Kasir, Stok, Riwayat, Dashboard, Retur) |
+| **Kasir / Karyawan** | `kasir` | Hanya menu Kasir |
 
 > **Catatan Keamanan:** Segera ubah PIN bawaan di tabel `users` pada database `petshop.db` sebelum digunakan untuk operasional toko.
 
