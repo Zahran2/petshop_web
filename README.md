@@ -71,7 +71,7 @@ petshop_web/
 Saat pertama kali dijalankan, sistem otomatis membuat dua akun bawaan:
 
 | Peran (Role) | Username | Hak Akses |
-| :--- | :--- | :--- | :--- |
+| :--- | :--- | :--- |
 | **Admin / Pemilik** | `admin` | Semua menu (Kasir, Stok, Riwayat, Dashboard, Retur) |
 | **Kasir / Karyawan** | `kasir` | Hanya menu Kasir |
 
