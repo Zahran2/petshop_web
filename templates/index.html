@@ -34,6 +34,12 @@
           <span id="label-skala-teks" onclick="resetUkuranTeks()" class="px-1.5 text-[11px] cursor-pointer">100%</span>
           <button onclick="ubahUkuranTeks(1)" class="px-2 py-1 font-bold hover:bg-amber-800 rounded-lg" title="Perbesar Teks">A+</button>
         </div>
+        {% if role == 'admin' %}
+        <button onclick="bukaModalPin()"
+                class="text-xs bg-amber-800 hover:bg-amber-900 px-2.5 py-1.5 rounded-xl font-semibold shadow-sm">
+          🔑 PIN
+        </button>
+        {% endif %}
         <button onclick="konfirmasiLogout()"
                 class="text-xs bg-red-600 hover:bg-red-700 px-2.5 py-1.5 rounded-xl font-semibold shadow-sm">
           Keluar
@@ -43,6 +49,28 @@
   </header>
 
   <main class="max-w-3xl mx-auto p-3">
+    
+    {% if role == 'admin' and (pin_status.admin_default or pin_status.kasir_default) %}
+    <div id="banner-pin-default"
+         class="mb-3 bg-red-50 border border-red-300 text-red-800 rounded-2xl p-3 flex items-center justify-between gap-2 shadow-sm">
+      <div class="text-xs">
+        <div class="font-bold">⚠️ Peringatan Keamanan: PIN Bawaan Masih Aktif!</div>
+        <div id="teks-status-pin" class="text-[11px] mt-0.5">
+          {% if pin_status.admin_default and pin_status.kasir_default %}
+            Akun <b>admin (1234)</b> dan <b>kasir (0000)</b> masih memakai PIN standar.
+          {% elif pin_status.admin_default %}
+            Akun <b>admin (1234)</b> masih memakai PIN standar.
+          {% else %}
+            Akun <b>kasir (0000)</b> masih memakai PIN standar.
+          {% endif %}
+        </div>
+      </div>
+      <button onclick="bukaModalPin()"
+              class="bg-red-600 hover:bg-red-700 text-white text-xs font-bold px-3 py-2 rounded-xl shrink-0">
+        Ganti PIN
+      </button>
+    </div>
+    {% endif %}
 
     <!-- ==================== TAB 1: KASIR ==================== -->
     <section id="tab-kasir" class="space-y-3">
@@ -424,6 +452,54 @@
       </div>
       <div id="list-riwayat-kulakan" class="flex-1 overflow-y-auto space-y-2"></div>
     </div>
+  </div>
+
+  <!-- ==================== MODAL UBAH PIN (KHUSUS ADMIN) ==================== -->
+  <div id="modal-pin" class="hidden fixed inset-0 bg-black/50 z-40 flex items-end sm:items-center justify-center">
+    <form id="form-ubah-pin" onsubmit="simpanPinBaru(event)"
+          class="bg-white w-full max-w-md rounded-t-3xl sm:rounded-2xl p-4 space-y-3">
+      <div class="flex justify-between items-center border-b pb-2">
+        <h3 class="font-bold text-lg">🔑 Ubah PIN Keamanan</h3>
+        <button type="button" onclick="tutupModal('modal-pin')" class="text-stone-400 text-xl px-2">✕</button>
+      </div>
+
+      <div>
+        <label class="text-xs font-semibold text-stone-600">Pilih Akun yang Diubah</label>
+        <select id="pin-target-user"
+                class="w-full border border-stone-300 rounded-xl px-3 py-2.5 text-sm mt-1 bg-white font-semibold">
+          <option value="admin">👑 Admin (Akses Penuh)</option>
+          <option value="kasir">🛒 Kasir (Khusus Transaksi)</option>
+        </select>
+      </div>
+
+      <div>
+        <label class="text-xs font-semibold text-stone-600">PIN Admin Saat Ini (Konfirmasi) *</label>
+        <input id="pin-admin-lama" type="password" inputmode="numeric" required placeholder="Masukkan PIN Admin saat ini"
+               class="w-full border border-stone-300 rounded-xl px-3 py-2.5 text-sm mt-1 tracking-widest" />
+      </div>
+
+      <div class="grid grid-cols-2 gap-2.5">
+        <div>
+          <label class="text-xs font-semibold text-stone-600">PIN Baru (4–6 Angka) *</label>
+          <input id="pin-baru" type="password" inputmode="numeric" minlength="4" maxlength="6" required placeholder="••••"
+                 class="w-full border border-stone-300 rounded-xl px-3 py-2.5 text-sm mt-1 tracking-widest" />
+        </div>
+        <div>
+          <label class="text-xs font-semibold text-stone-600">Ulangi PIN Baru *</label>
+          <input id="pin-konfirmasi" type="password" inputmode="numeric" minlength="4" maxlength="6" required placeholder="••••"
+                 class="w-full border border-stone-300 rounded-xl px-3 py-2.5 text-sm mt-1 tracking-widest" />
+        </div>
+      </div>
+
+      <div class="flex gap-2 pt-2">
+        <button type="button" onclick="tutupModal('modal-pin')"
+                class="flex-1 bg-stone-200 py-3 rounded-xl font-semibold text-xs">Batal</button>
+        <button type="submit" id="btn-simpan-pin"
+                class="flex-1 bg-amber-600 text-white py-3 rounded-xl font-bold text-xs shadow">
+          Simpan PIN Baru
+        </button>
+      </div>
+    </form>
   </div>
 
   <!-- ==================== NAVIGASI BAWAH 4 MENU (KHUSUS ADMIN) ==================== -->
@@ -1139,6 +1215,53 @@
         rows.push([t.id, t.tanggal, t.total_tampil, t.profit_tampil]);
       });
       unduhCsv(`Riwayat_Transaksi_${periode}.csv`, rows);
+    }
+
+    // ==================== UBAH PIN KEAMANAN ====================
+    function bukaModalPin() {
+      if (USER_ROLE !== 'admin') return;
+      document.getElementById('form-ubah-pin').reset();
+      document.getElementById('modal-pin').classList.remove('hidden');
+    }
+
+    async function simpanPinBaru(e) {
+      e.preventDefault();
+      const btn = document.getElementById('btn-simpan-pin');
+      btn.disabled = true;
+      btn.textContent = 'Menyimpan...';
+
+      const payload = {
+        target_user: document.getElementById('pin-target-user').value,
+        pin_admin_lama: document.getElementById('pin-admin-lama').value,
+        pin_baru: document.getElementById('pin-baru').value,
+        pin_konfirmasi: document.getElementById('pin-konfirmasi').value
+      };
+
+      const res = await fetch('/api/ubah_pin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const hasil = await res.json();
+
+      btn.disabled = false;
+      btn.textContent = 'Simpan PIN Baru';
+
+      if (hasil.ok) {
+        alert(hasil.pesan);
+        tutupModal('modal-pin');
+        const banner = document.getElementById('banner-pin-default');
+        if (banner && hasil.pin_status) {
+          if (!hasil.pin_status.admin_default && !hasil.pin_status.kasir_default) {
+            banner.remove();
+          } else {
+            const sisa = hasil.pin_status.admin_default ? 'admin (1234)' : 'kasir (0000)';
+            document.getElementById('teks-status-pin').innerHTML = `Akun <b>${sisa}</b> masih memakai PIN standar.`;
+          }
+        }
+      } else {
+        alert('Gagal: ' + hasil.pesan);
+      }
     }
 
     function tutupModal(id) {

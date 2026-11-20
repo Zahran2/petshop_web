@@ -225,6 +225,14 @@ def logout():
     session.clear()
     return redirect(url_for("login"))
 
+def cek_status_pin_default():
+    conn = db.get_connection()
+    admin_row = conn.execute("SELECT pin FROM users WHERE username = 'admin'").fetchone()
+    kasir_row = conn.execute("SELECT pin FROM users WHERE username = 'kasir'").fetchone()
+    return {
+        "admin_default": bool(admin_row and admin_row["pin"] == "1234"),
+        "kasir_default": bool(kasir_row and kasir_row["pin"] == "0000"),
+    }
 
 @app.route("/")
 @login_required
@@ -232,7 +240,8 @@ def index():
     return render_template(
         "index.html",
         role=session.get("role", "kasir"),
-        username=session.get("username", "kasir")
+        username=session.get("username", "kasir"),
+        pin_status=cek_status_pin_default()
     )
 
 
@@ -772,6 +781,43 @@ def api_dashboard():
         "hampir_exp": hampir_exp
     })
 
+# ==================== API KEAMANAN: UBAH PIN (KHUSUS ADMIN) ====================
+
+@app.route("/api/ubah_pin", methods=["POST"])
+@login_required
+@admin_required
+def api_ubah_pin():
+    data = request.get_json(silent=True) or {}
+    target_user = data.get("target_user", "").strip().lower()
+    pin_admin_lama = str(data.get("pin_admin_lama", "")).strip()
+    pin_baru = str(data.get("pin_baru", "")).strip()
+    pin_konfirmasi = str(data.get("pin_konfirmasi", "")).strip()
+
+    if target_user not in ("admin", "kasir"):
+        return jsonify({"ok": False, "pesan": "Akun tujuan tidak valid"}), 400
+
+    if not pin_baru.isdigit() or not (4 <= len(pin_baru) <= 6):
+        return jsonify({"ok": False, "pesan": "PIN baru harus berupa 4 sampai 6 digit angka"}), 400
+
+    if pin_baru in ("1234", "0000"):
+        return jsonify({"ok": False, "pesan": "Jangan gunakan PIN bawaan (1234 atau 0000)"}), 400
+
+    if pin_baru != pin_konfirmasi:
+        return jsonify({"ok": False, "pesan": "Konfirmasi PIN baru tidak cocok"}), 400
+
+    conn = db.get_connection()
+    admin_row = conn.execute("SELECT pin FROM users WHERE username = 'admin'").fetchone()
+    if not admin_row or admin_row["pin"] != pin_admin_lama:
+        return jsonify({"ok": False, "pesan": "PIN Admin saat ini salah!"}), 403
+
+    conn.execute("UPDATE users SET pin = ? WHERE username = ?", (pin_baru, target_user))
+    conn.commit()
+
+    return jsonify({
+        "ok": True,
+        "pesan": f"PIN untuk akun '{target_user}' berhasil diperbarui!",
+        "pin_status": cek_status_pin_default()
+    })
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)
