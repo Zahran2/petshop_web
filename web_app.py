@@ -45,6 +45,41 @@ app.config.update(
     SESSION_COOKIE_SECURE=("PYTHONANYWHERE_DOMAIN" in os.environ)
 )
 
+# ==================== KEAMANAN: CSRF & SECURITY HEADERS ====================
+
+def get_csrf_token():
+    if "csrf_token" not in session:
+        session["csrf_token"] = secrets.token_hex(32)
+    return session["csrf_token"]
+
+
+@app.context_processor
+def inject_csrf_token():
+    return {"csrf_token": get_csrf_token()}
+
+
+@app.before_request
+def validasi_csrf():
+    if request.method in ("POST", "PUT", "DELETE"):
+        token_sesi = session.get("csrf_token", "")
+        if request.path.startswith("/api/"):
+            token_req = request.headers.get("X-CSRF-Token", "")
+        else:
+            token_req = request.form.get("csrf_token", "")
+
+        if not token_sesi or not token_req or not secrets.compare_digest(token_sesi, token_req):
+            if request.path.startswith("/api/"):
+                return jsonify({"ok": False, "pesan": "Sesi keamanan tidak valid. Muat ulang halaman."}), 403
+            return "Permintaan tidak valid (CSRF token mismatch). Silakan kembali dan muat ulang halaman.", 403
+
+
+@app.after_request
+def tambah_security_headers(response):
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "same-origin"
+    return response
+
 # ==================== KEAMANAN: ANTI BRUTE-FORCE LOGIN ====================
 BATAS_GAGAL_LOGIN = 5
 DURASI_BLOKIR_DETIK = 300  # 5 menit
@@ -351,6 +386,7 @@ def login():
             session.permanent = True
             session["username"] = username
             session["role"] = role
+            session["csrf_token"] = secrets.token_hex(32)
             return redirect(url_for("index"))
         else:
             time.sleep(0.5)  # Jeda mikro untuk memperlambat skrip otomatis

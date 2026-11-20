@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <title>Kasir & Stok Petshop</title>
+  <meta name="csrf-token" content="{{ csrf_token }}" />
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
     body { -webkit-tap-highlight-color: transparent; }
@@ -522,6 +523,29 @@
   {% endif %}
 
   <script>
+    // ==================== KEAMANAN: AUTO-CSRF & SANITASI XSS ====================
+    const CSRF_TOKEN = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
+    const _nativeFetch = window.fetch;
+    window.fetch = function(resource, options = {}) {
+      const url = typeof resource === 'string' ? resource : resource.url;
+      const method = (options.method || 'GET').toUpperCase();
+      if (url.startsWith('/api/') && ['POST', 'PUT', 'DELETE'].includes(method)) {
+        const headers = new Headers(options.headers || {});
+        headers.set('X-CSRF-Token', CSRF_TOKEN);
+        options = { ...options, headers };
+      }
+      return _nativeFetch(resource, options);
+    };
+
+    function escapeHtml(str) {
+      return String(str ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
     const USER_ROLE = "{{ role }}";
     let produkKasir = [];
     let produkStok = [];
@@ -591,7 +615,8 @@
         const valLama = el.value;
         el.innerHTML = '<option value="Semua Kategori">Semua Kategori</option>';
         kategoriList.forEach(k => {
-          el.innerHTML += `<option value="${k}">${k}</option>`;
+          const aman = escapeHtml(k);
+          el.innerHTML += `<option value="${aman}">${aman}</option>`;
         });
         if ([...el.options].some(o => o.value === valLama)) el.value = valLama;
       });
@@ -601,7 +626,8 @@
         const valForm = formKat.value;
         formKat.innerHTML = '<option value="">-- Tanpa Kategori --</option>';
         kategoriList.forEach(k => {
-          formKat.innerHTML += `<option value="${k}">${k}</option>`;
+          const aman = escapeHtml(k);
+          formKat.innerHTML += `<option value="${aman}">${aman}</option>`;
         });
         if ([...formKat.options].some(o => o.value === valForm)) formKat.value = valForm;
       }
@@ -669,18 +695,18 @@
 
       box.innerHTML = produkKasir.map(p => {
         const img = p.gambar
-          ? `<img src="/img_produk/${p.gambar}" class="w-14 h-14 rounded-xl object-cover bg-stone-100 shrink-0" loading="lazy" />`
+          ? `<img src="/img_produk/${encodeURIComponent(p.gambar)}" class="w-14 h-14 rounded-xl object-cover bg-stone-100 shrink-0" loading="lazy" />`
           : `<div class="w-14 h-14 rounded-xl bg-stone-200 flex items-center justify-center text-xl shrink-0">🐾</div>`;
         const habis = p.stok <= 0;
         return `
           <div class="bg-white p-3 rounded-2xl shadow-sm border border-stone-200 flex items-center gap-3">
             ${img}
             <div class="flex-1 min-w-0">
-              <div class="font-bold text-sm truncate">${p.nama}</div>
+              <div class="font-bold text-sm truncate">${escapeHtml(p.nama)}</div>
               <div class="text-xs text-amber-700 font-semibold">${formatRp(p.harga_jual)}</div>
-              <div class="text-[11px] text-stone-400">Stok: ${p.stok} ${p.satuan}</div>
+              <div class="text-[11px] text-stone-400">Stok: ${Number(p.stok)} ${escapeHtml(p.satuan)}</div>
             </div>
-            <button ${habis ? 'disabled' : `onclick="tambahCart(${p.id})"`}
+            <button ${habis ? 'disabled' : `onclick="tambahCart(${Number(p.id)})"`}
               class="${habis ? 'bg-stone-200 text-stone-400' : 'bg-amber-600 active:scale-95 text-white'} px-3 py-2 rounded-xl text-xs font-bold shrink-0">
               ${habis ? 'Habis' : '+ Tambah'}
             </button>
@@ -754,14 +780,14 @@
       box.innerHTML = cart.map(item => `
         <div class="flex justify-between items-center bg-stone-50 p-2.5 rounded-xl gap-2">
           <div class="min-w-0 flex-1">
-            <div class="font-semibold text-sm truncate">${item.nama_produk}</div>
+            <div class="font-semibold text-sm truncate">${escapeHtml(item.nama_produk)}</div>
             <div class="text-xs text-stone-500">${formatRp(item.harga_satuan)} × ${item.jumlah} = <b>${formatRp(item.harga_satuan * item.jumlah)}</b></div>
           </div>
           <div class="flex items-center gap-1.5 shrink-0">
-            <button onclick="ubahQty(${item.produk_id}, -1)" class="w-7 h-7 rounded-lg bg-stone-200 font-bold">-</button>
+            <button onclick="ubahQty(${Number(item.produk_id)}, -1)" class="w-7 h-7 rounded-lg bg-stone-200 font-bold">-</button>
             <span class="w-6 text-center font-bold text-xs">${item.jumlah}</span>
-            <button onclick="ubahQty(${item.produk_id}, 1)" class="w-7 h-7 rounded-lg bg-amber-600 text-white font-bold">+</button>
-            <button onclick="hapusItemCart(${item.produk_id})" title="Hapus Item"
+            <button onclick="ubahQty(${Number(item.produk_id)}, 1)" class="w-7 h-7 rounded-lg bg-amber-600 text-white font-bold">+</button>
+            <button onclick="hapusItemCart(${Number(item.produk_id)})" title="Hapus Item"
                     class="w-7 h-7 rounded-lg bg-red-100 text-red-600 font-bold text-xs ml-1">✕</button>
           </div>
         </div>
@@ -884,27 +910,27 @@
 
       box.innerHTML = produkStok.map(p => {
         const img = p.gambar
-          ? `<img src="/img_produk/${p.gambar}" class="w-12 h-12 rounded-xl object-cover shrink-0" loading="lazy" />`
+          ? `<img src="/img_produk/${encodeURIComponent(p.gambar)}" class="w-12 h-12 rounded-xl object-cover shrink-0" loading="lazy" />`
           : `<div class="w-12 h-12 rounded-xl bg-stone-200 flex items-center justify-center text-lg shrink-0">📦</div>`;
         const menipis = p.stok <= 5 ? 'text-red-600 font-bold' : 'text-stone-600';
         const expInfo = cekStatusExpired(p.expired_date);
-        const badgeExp = expInfo ? `<span class="inline-block text-[10px] px-2 py-0.5 rounded-full font-semibold ${expInfo.cls}">${expInfo.label}</span>` : '';
+        const badgeExp = expInfo ? `<span class="inline-block text-[10px] px-2 py-0.5 rounded-full font-semibold ${expInfo.cls}">${escapeHtml(expInfo.label)}</span>` : '';
         const isHighlight = highlightId && Number(highlightId) === Number(p.id);
 
         return `
-          <div id="stok-row-${p.id}" class="bg-white p-3 rounded-2xl shadow-sm border border-stone-200 flex items-center gap-3 ${isHighlight ? 'highlight-baru' : ''}">
+          <div id="stok-row-${Number(p.id)}" class="bg-white p-3 rounded-2xl shadow-sm border border-stone-200 flex items-center gap-3 ${isHighlight ? 'highlight-baru' : ''}">
             ${img}
             <div class="flex-1 min-w-0 space-y-0.5">
-              <div class="font-bold text-sm truncate">${p.nama}</div>
-              <div class="text-[11px] text-stone-500">${p.kategori || 'Tanpa Kategori'} • Modal: ${formatRp(p.harga_beli)} • Jual: <b>${formatRp(p.harga_jual)}</b></div>
+              <div class="font-bold text-sm truncate">${escapeHtml(p.nama)}</div>
+              <div class="text-[11px] text-stone-500">${escapeHtml(p.kategori || 'Tanpa Kategori')} • Modal: ${formatRp(p.harga_beli)} • Jual: <b>${formatRp(p.harga_jual)}</b></div>
               <div class="flex flex-wrap items-center gap-1.5">
-                <span class="text-xs ${menipis}">Stok: ${p.stok} ${p.satuan}</span>
+                <span class="text-xs ${menipis}">Stok: ${Number(p.stok)} ${escapeHtml(p.satuan)}</span>
                 ${badgeExp}
               </div>
             </div>
             <div class="flex flex-col sm:flex-row gap-1.5 shrink-0">
-              <button onclick='bukaFormProduk(${JSON.stringify(p)})' class="bg-blue-50 text-blue-600 px-2.5 py-1.5 rounded-lg text-xs font-semibold">Edit</button>
-              <button onclick="hapusProduk(${p.id}, '${p.nama.replace(/'/g, "\\'")}')" class="bg-red-50 text-red-600 px-2.5 py-1.5 rounded-lg text-xs font-semibold">Hapus</button>
+              <button onclick="editProdukById(${Number(p.id)})" class="bg-blue-50 text-blue-600 px-2.5 py-1.5 rounded-lg text-xs font-semibold">Edit</button>
+              <button onclick="hapusProdukById(${Number(p.id)})" class="bg-red-50 text-red-600 px-2.5 py-1.5 rounded-lg text-xs font-semibold">Hapus</button>
             </div>
           </div>`;
       }).join('');
@@ -913,6 +939,16 @@
         const el = document.getElementById(`stok-row-${highlightId}`);
         if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
       }
+    }
+
+    function editProdukById(id) {
+      const prod = produkStok.find(x => Number(x.id) === Number(id));
+      if (prod) bukaFormProduk(prod);
+    }
+
+    function hapusProdukById(id) {
+      const prod = produkStok.find(x => Number(x.id) === Number(id));
+      if (prod) hapusProduk(prod.id, prod.nama);
     }
 
     function bukaFormProduk(p = null) {
@@ -1013,13 +1049,23 @@
       }
       box.innerHTML = daftarKategoriLengkap.map(k => `
         <div class="flex justify-between items-center bg-stone-50 p-2.5 rounded-xl">
-          <span class="font-semibold text-sm">${k.nama}</span>
+          <span class="font-semibold text-sm">${escapeHtml(k.nama)}</span>
           <div class="flex gap-1.5">
-            <button onclick="editKategori(${k.id}, '${k.nama.replace(/'/g, "\\'")}')" class="bg-blue-100 text-blue-700 px-2.5 py-1 rounded-lg text-xs font-semibold">Edit</button>
-            <button onclick="hapusKategori(${k.id}, '${k.nama.replace(/'/g, "\\'")}')" class="bg-red-100 text-red-700 px-2.5 py-1 rounded-lg text-xs font-semibold">Hapus</button>
+            <button onclick="editKategoriById(${Number(k.id)})" class="bg-blue-100 text-blue-700 px-2.5 py-1 rounded-lg text-xs font-semibold">Edit</button>
+            <button onclick="hapusKategoriById(${Number(k.id)})" class="bg-red-100 text-red-700 px-2.5 py-1 rounded-lg text-xs font-semibold">Hapus</button>
           </div>
         </div>
       `).join('');
+    }
+
+    function editKategoriById(id) {
+      const kat = daftarKategoriLengkap.find(x => Number(x.id) === Number(id));
+      if (kat) editKategori(kat.id, kat.nama);
+    }
+
+    function hapusKategoriById(id) {
+      const kat = daftarKategoriLengkap.find(x => Number(x.id) === Number(id));
+      if (kat) hapusKategori(kat.id, kat.nama);
     }
 
     async function simpanKategoriBaru() {
@@ -1172,9 +1218,9 @@
       }
       box.innerHTML = list.map((item, i) => `
         <div class="flex justify-between items-center py-1 border-b border-stone-100 last:border-0">
-          <span class="truncate pr-2">${i + 1}. ${item[keyNama]}</span>
+          <span class="truncate pr-2">${i + 1}. ${escapeHtml(item[keyNama])}</span>
           <span class="font-bold ${isRupiah ? 'text-blue-600' : 'text-emerald-600'} shrink-0">
-            ${isRupiah ? formatRp(item[keyNilai]) : item[keyNilai] + ' terjual'}
+            ${isRupiah ? formatRp(item[keyNilai]) : Number(item[keyNilai]) + ' terjual'}
           </span>
         </div>
       `).join('');
