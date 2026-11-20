@@ -36,9 +36,9 @@
                class="w-full border border-stone-300 rounded-xl px-3.5 py-3 text-base tracking-widest focus:outline-none focus:border-amber-500" />
       </div>
 
-      <button type="submit"
-              class="w-full bg-amber-600 hover:bg-amber-700 active:scale-[0.99] text-white font-bold py-3 rounded-xl text-sm shadow">
-        MASUK
+      <button type="submit" {{ 'disabled' if terkunci else '' }}
+              class="w-full {{ 'bg-stone-400 cursor-not-allowed' if terkunci else 'bg-amber-600 hover:bg-amber-700 active:scale-[0.99]' }} text-white font-bold py-3 rounded-xl text-sm shadow">
+        {{ 'TERKUNCI SEMENTARA' if terkunci else 'MASUK' }}
       </button>
     </form>
   </div>

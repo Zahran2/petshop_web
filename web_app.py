@@ -43,6 +43,72 @@ app.config.update(
     SESSION_COOKIE_SAMESITE="Lax",
     SESSION_COOKIE_SECURE=("PYTHONANYWHERE_DOMAIN" in os.environ)
 )
+
+# ==================== KEAMANAN: ANTI BRUTE-FORCE LOGIN ====================
+BATAS_GAGAL_LOGIN = 5
+DURASI_BLOKIR_DETIK = 300  # 5 menit
+PERCOBAAN_LOGIN_GAGAL = {}
+
+
+def get_client_ip():
+    """Mengambil IP asli pengunjung (mendukung reverse proxy PythonAnywhere)."""
+    forwarded = request.headers.get("X-Forwarded-For", "")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.headers.get("X-Real-IP") or request.remote_addr or "unknown"
+
+
+def format_sisa_waktu(detik):
+    menit, sisa_detik = divmod(max(1, int(detik)), 60)
+    if menit > 0:
+        return f"{menit} menit {sisa_detik} detik"
+    return f"{sisa_detik} detik"
+
+
+def cek_status_blokir_login(ip):
+    """Mengecek apakah IP sedang diblokir sementara."""
+    data = PERCOBAAN_LOGIN_GAGAL.get(ip)
+    if not data:
+        return False, 0
+
+    sekarang = time.time()
+    locked_until = data.get("locked_until", 0)
+    if locked_until > sekarang:
+        return True, int(locked_until - sekarang)
+
+    # Jika masa blokir sudah lewat, bersihkan catatan lama
+    if locked_until > 0:
+        PERCOBAAN_LOGIN_GAGAL.pop(ip, None)
+    return False, 0
+
+
+def catat_kegagalan_login(ip):
+    """Mencatat kegagalan login dan mengunci IP jika mencapai batas."""
+    sekarang = time.time()
+
+    # Pembersihan ringan agar memori tidak menumpuk
+    if len(PERCOBAAN_LOGIN_GAGAL) > 500:
+        expired_ips = [
+            k for k, v in PERCOBAAN_LOGIN_GAGAL.items()
+            if v.get("locked_until", 0) < sekarang and (sekarang - v.get("last_try", 0)) > 900
+        ]
+        for k in expired_ips:
+            PERCOBAAN_LOGIN_GAGAL.pop(k, None)
+
+    data = PERCOBAAN_LOGIN_GAGAL.get(ip, {"count": 0, "locked_until": 0, "last_try": sekarang})
+    data["count"] += 1
+    data["last_try"] = sekarang
+
+    if data["count"] >= BATAS_GAGAL_LOGIN:
+        data["locked_until"] = sekarang + DURASI_BLOKIR_DETIK
+
+    PERCOBAAN_LOGIN_GAGAL[ip] = data
+    return data
+
+
+def reset_kegagalan_login(ip):
+    PERCOBAAN_LOGIN_GAGAL.pop(ip, None)
+
 FOLDER_IMG = os.path.join(BASE_DIR, "img_produk")
 os.makedirs(FOLDER_IMG, exist_ok=True)
 
@@ -231,6 +297,14 @@ def login():
     if "role" in session:
         return redirect(url_for("index"))
 
+    ip = get_client_ip()
+    terkunci, sisa_detik = cek_status_blokir_login(ip)
+
+    if terkunci:
+        pesan_blokir = f"Terlalu banyak percobaan gagal. Coba lagi dalam {format_sisa_waktu(sisa_detik)}."
+        status_code = 429 if request.method == "POST" else 200
+        return render_template("login.html", error=pesan_blokir, terkunci=True), status_code
+
     error = None
     if request.method == "POST":
         username = request.form.get("username", "").strip().lower()
@@ -238,14 +312,23 @@ def login():
         role = cek_kredensial(username, pin)
 
         if role:
+            reset_kegagalan_login(ip)
             session.permanent = True
             session["username"] = username
             session["role"] = role
             return redirect(url_for("index"))
         else:
-            error = "Username atau PIN salah!"
+            time.sleep(0.5)  # Jeda mikro untuk memperlambat skrip otomatis
+            data_gagal = catat_kegagalan_login(ip)
+            sisa_coba = BATAS_GAGAL_LOGIN - data_gagal["count"]
 
-    return render_template("login.html", error=error)
+            if sisa_coba <= 0:
+                error = f"Terlalu banyak percobaan gagal. Akun dikunci selama {format_sisa_waktu(DURASI_BLOKIR_DETIK)}."
+                return render_template("login.html", error=error, terkunci=True), 429
+            else:
+                error = f"Username atau PIN salah! Sisa percobaan: {sisa_coba} kali."
+
+    return render_template("login.html", error=error, terkunci=False)
 
 
 @app.route("/logout")
