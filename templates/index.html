@@ -282,6 +282,22 @@
           </a>
         </div>
       </div>
+      <!-- Kartu 5: Log Aktivitas Keamanan (Khusus Admin) -->
+      <div class="bg-white rounded-2xl p-4 shadow-sm border border-stone-200 space-y-2.5">
+        <div class="flex justify-between items-center">
+          <div>
+            <h3 class="font-bold text-sm text-stone-800">🛡️ Log Aktivitas Keamanan</h3>
+            <p class="text-[11px] text-stone-500">Catatan login, ubah PIN, hapus produk, & retur transaksi</p>
+          </div>
+          <button onclick="muatAuditLog()"
+                  class="bg-stone-100 hover:bg-stone-200 text-stone-700 px-2.5 py-1.5 rounded-xl text-xs font-semibold">
+            🔄 Muat Ulang
+          </button>
+        </div>
+        <div id="list-audit-log" class="space-y-1.5 text-xs max-h-64 overflow-y-auto">
+          <p class="text-stone-400">Memuat log aktivitas...</p>
+        </div>
+      </div>
     </section>
     {% endif %}
 
@@ -309,8 +325,8 @@
         </div>
         <div>
           <label class="text-xs text-stone-500">Uang Diterima (Rp)</label>
-          <input id="input-bayar" type="number" oninput="hitungKembalian()"
-                 class="w-full border border-stone-300 rounded-xl px-3.5 py-2.5 text-lg font-bold mt-1" />
+          <input id="input-bayar" type="number" min="0" oninput="hitungKembalian()"
+            class="w-full border border-stone-300 rounded-xl px-3.5 py-2.5 text-lg font-bold mt-1" />
           <div class="grid grid-cols-4 gap-1.5 mt-2">
             <button onclick="setUangPas()" class="bg-amber-100 text-amber-800 py-2 rounded-lg text-xs font-bold">Uang Pas</button>
             <button onclick="setUang(20000)" class="bg-stone-100 py-2 rounded-lg text-xs font-semibold">20.000</button>
@@ -399,21 +415,21 @@
         <div class="grid grid-cols-2 gap-2.5">
           <div>
             <label class="text-xs font-semibold text-stone-600">Harga Modal / Beli (Rp)</label>
-            <input type="number" name="harga_beli" id="prod-beli" value="0"
-                   class="w-full border border-stone-300 rounded-xl px-3 py-2.5 text-sm mt-1" />
+            <input type="number" name="harga_beli" id="prod-beli" min="0" value="0"
+              class="w-full border border-stone-300 rounded-xl px-3 py-2.5 text-sm mt-1" />
           </div>
           <div>
             <label class="text-xs font-semibold text-stone-600">Harga Jual (Rp) *</label>
-            <input type="number" name="harga_jual" id="prod-jual" required
-                   class="w-full border border-stone-300 rounded-xl px-3 py-2.5 text-sm mt-1" />
+            <input type="number" name="harga_jual" id="prod-jual" min="0" required
+              class="w-full border border-stone-300 rounded-xl px-3 py-2.5 text-sm mt-1" />
           </div>
         </div>
 
         <div class="grid grid-cols-2 gap-2.5">
           <div>
             <label class="text-xs font-semibold text-stone-600">Stok *</label>
-            <input type="number" name="stok" id="prod-stok" required
-                   class="w-full border border-stone-300 rounded-xl px-3 py-2.5 text-sm mt-1" />
+            <input type="number" name="stok" id="prod-stok" min="0" required
+              class="w-full border border-stone-300 rounded-xl px-3 py-2.5 text-sm mt-1" />
           </div>
           <div>
             <label class="text-xs font-semibold text-stone-600">Tgl Expired (Opsional)</label>
@@ -546,7 +562,7 @@
     // ==================== KEAMANAN: AUTO-CSRF & SANITASI XSS ====================
     const CSRF_TOKEN = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
     const _nativeFetch = window.fetch;
-    window.fetch = function(resource, options = {}) {
+    window.fetch = async function(resource, options = {}) {
       const url = typeof resource === 'string' ? resource : resource.url;
       const method = (options.method || 'GET').toUpperCase();
       if (url.startsWith('/api/') && ['POST', 'PUT', 'DELETE'].includes(method)) {
@@ -554,7 +570,11 @@
         headers.set('X-CSRF-Token', CSRF_TOKEN);
         options = { ...options, headers };
       }
-      return _nativeFetch(resource, options);
+      const response = await _nativeFetch(resource, options);
+      if (url.startsWith('/api/') && response.status === 401) {
+        window.location.href = '/login';
+      }
+      return response;
     };
 
     function escapeHtml(str) {
@@ -1136,11 +1156,11 @@
       box.innerHTML = items.map(it => `
         <div class="bg-stone-50 p-3 rounded-xl flex justify-between items-center">
           <div>
-            <div class="font-bold text-sm">${it.nama_produk}</div>
-            <div class="text-[11px] text-stone-500">${it.tanggal} • Modal: ${formatRp(it.harga_beli)}</div>
+            <div class="font-bold text-sm">${escapeHtml(it.nama_produk)}</div>
+            <div class="text-[11px] text-stone-500">${escapeHtml(it.tanggal)} • Modal: ${formatRp(it.harga_beli)}</div>
           </div>
           <span class="bg-emerald-100 text-emerald-800 font-bold text-xs px-2.5 py-1 rounded-lg">
-            +${it.jumlah} ${it.satuan}
+            +${Number(it.jumlah)} ${escapeHtml(it.satuan)}
           </span>
         </div>
       `).join('');
@@ -1228,6 +1248,46 @@
       renderListDash('dash-top-kategori', d.top_kategori, 'kategori', 'total_profit', true);
       renderListDash('dash-top-produk', d.top_produk, 'nama_produk', 'total_qty', false);
       renderListDash('dash-top-profit', d.top_profit, 'nama_produk', 'total_profit', true);
+
+      muatAuditLog();
+    }
+
+    async function muatAuditLog() {
+      if (USER_ROLE !== 'admin') return;
+      const box = document.getElementById('list-audit-log');
+      if (!box) return;
+
+      const res = await fetch('/api/audit_log');
+      const data = await res.json();
+      const logs = data.logs || [];
+
+      if (!logs.length) {
+        box.innerHTML = '<p class="text-stone-400">Belum ada catatan aktivitas.</p>';
+        return;
+      }
+
+      const warnaBadge = {
+        LOGIN_SUKSES: 'bg-emerald-100 text-emerald-700',
+        UBAH_PIN: 'bg-amber-100 text-amber-800',
+        RETUR_TRANSAKSI: 'bg-red-100 text-red-700',
+        HAPUS_PRODUK: 'bg-rose-100 text-rose-700'
+      };
+
+      box.innerHTML = logs.map(item => {
+        const cls = warnaBadge[item.aksi] || 'bg-stone-100 text-stone-700';
+        return `
+          <div class="bg-stone-50 p-2.5 rounded-xl flex justify-between items-start gap-2">
+            <div class="min-w-0 flex-1">
+              <div class="flex items-center gap-1.5 flex-wrap">
+                <span class="px-2 py-0.5 rounded-md text-[10px] font-bold ${cls}">${escapeHtml(item.aksi)}</span>
+                <span class="font-semibold text-stone-700">${escapeHtml(item.username)}</span>
+              </div>
+              <div class="text-stone-600 mt-1 break-words">${escapeHtml(item.detail)}</div>
+            </div>
+            <div class="text-[10px] text-stone-400 shrink-0 text-right">${escapeHtml(item.tanggal)}</div>
+          </div>
+        `;
+      }).join('');
     }
 
     function renderListDash(elId, list, keyNama, keyNilai, isRupiah) {

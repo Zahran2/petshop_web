@@ -14,7 +14,7 @@ from flask import (
     session, redirect, url_for
 )
 from werkzeug.security import generate_password_hash, check_password_hash
-from PIL import Image, ImageOps
+from PIL import Image, ImageOps, UnidentifiedImageError
 import db
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -40,6 +40,14 @@ def muat_atau_buat_secret_key():
 
 
 app = Flask(__name__)
+
+app.config["MAX_CONTENT_LENGTH"] = 5 * 1024 * 1024  # Maksimal upload 5 MB
+
+
+@app.errorhandler(413)
+def file_terlalu_besar(e):
+    return jsonify({"ok": False, "pesan": "Ukuran foto terlalu besar (maksimal 5 MB)"}), 413
+
 app.secret_key = muat_atau_buat_secret_key()
 app.permanent_session_lifetime = timedelta(days=30)
 
@@ -64,7 +72,25 @@ def inject_csrf_token():
 
 
 @app.before_request
-def validasi_csrf():
+def validasi_sesi_dan_csrf():
+    # 1. Cek keaslian sesi aktif (hanguskan jika akun dihapus atau PIN telah diganti)
+    if request.endpoint not in ("static", "login") and "username" in session:
+        conn = db.get_connection()
+        user = conn.execute(
+            "SELECT pin, role FROM users WHERE username = ?",
+            (session["username"],)
+        ).fetchone()
+
+        pin_sig = session.get("pin_sig", "")
+        if not user or not pin_sig or not str(user["pin"]).startswith(pin_sig):
+            session.clear()
+            if request.path.startswith("/api/"):
+                return jsonify({"ok": False, "pesan": "Sesi berakhir karena PIN telah diperbarui. Silakan login ulang."}), 401
+            return redirect(url_for("login"))
+
+        session["role"] = user["role"]
+
+    # 2. Validasi CSRF untuk request pengubah data
     if request.method in ("POST", "PUT", "DELETE"):
         token_sesi = session.get("csrf_token", "")
         if request.path.startswith("/api/"):
@@ -258,6 +284,16 @@ def inisialisasi_skema_lengkap():
         )
     """)
 
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS audit_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            tanggal TEXT NOT NULL,
+            username TEXT NOT NULL,
+            aksi TEXT NOT NULL,
+            detail TEXT DEFAULT ''
+        )
+    """)
+
     conn.commit()
 
 
@@ -279,6 +315,24 @@ def migrasi_hash_pin():
 inisialisasi_skema_lengkap()
 migrasi_hash_pin()
 
+def catat_audit(aksi, detail="", username=None):
+    """Mencatat aktivitas sensitif ke tabel audit_log."""
+    user_aktif = username or session.get("username") or "system"
+    waktu = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    conn = db.get_connection()
+    try:
+        conn.execute(
+            "INSERT INTO audit_log (tanggal, username, aksi, detail) VALUES (?, ?, ?, ?)",
+            (waktu, user_aktif, aksi, detail)
+        )
+        conn.execute("""
+            DELETE FROM audit_log
+            WHERE id NOT IN (SELECT id FROM audit_log ORDER BY id DESC LIMIT 1000)
+        """)
+        conn.commit()
+    except Exception:
+        pass
+
 
 def get_table_columns(table_name):
     conn = db.get_connection()
@@ -293,8 +347,8 @@ def cek_kredensial(username, pin):
         (username,)
     ).fetchone()
     if user and verifikasi_pin_db(user["pin"], pin):
-        return user["role"]
-    return None
+        return user["role"], str(user["pin"])[:24]
+    return None, None
 
 
 def login_required(f):
@@ -323,27 +377,35 @@ def proses_dan_kompres_foto(file_storage, foto_lama=""):
 
     ekstensi = os.path.splitext(file_storage.filename)[1].lower()
     if ekstensi not in (".jpg", ".jpeg", ".png", ".webp"):
-        return foto_lama
+        raise ValueError("Format gambar harus JPG, PNG, atau WEBP.")
 
-    nama_file_baru = f"prod_{int(time.time() * 1000)}.jpg"
-    path_simpan = os.path.join(FOLDER_IMG, nama_file_baru)
+    try:
+        file_storage.stream.seek(0)
+        with Image.open(file_storage.stream) as img_cek:
+            img_cek.verify()
 
-    with Image.open(file_storage.stream) as img:
-        img = ImageOps.exif_transpose(img)
-        if img.mode in ("RGBA", "LA", "P"):
-            latar = Image.new("RGB", img.size, (255, 255, 255))
-            if img.mode == "P":
-                img = img.convert("RGBA")
-            latar.paste(img, mask=img.split()[-1])
-            img = latar
-        elif img.mode != "RGB":
-            img = img.convert("RGB")
+        file_storage.stream.seek(0)
+        with Image.open(file_storage.stream) as img:
+            img = ImageOps.exif_transpose(img)
+            if img.mode in ("RGBA", "LA", "P"):
+                latar = Image.new("RGB", img.size, (255, 255, 255))
+                if img.mode == "P":
+                    img = img.convert("RGBA")
+                latar.paste(img, mask=img.split()[-1])
+                img = latar
+            elif img.mode != "RGB":
+                img = img.convert("RGB")
 
-        img.thumbnail((300, 300), Image.Resampling.LANCZOS)
-        img.save(path_simpan, "JPEG", optimize=True, quality=80)
+            img.thumbnail((300, 300), Image.Resampling.LANCZOS)
+            nama_file_baru = f"prod_{int(time.time() * 1000)}_{secrets.token_hex(3)}.jpg"
+            path_simpan = os.path.join(FOLDER_IMG, nama_file_baru)
+            img.save(path_simpan, "JPEG", optimize=True, quality=80)
+    except (UnidentifiedImageError, OSError, ValueError):
+        raise ValueError("File gambar rusak atau bukan file gambar yang valid.")
 
-    if foto_lama and foto_lama != nama_file_baru:
-        path_lama = os.path.join(FOLDER_IMG, foto_lama)
+    foto_lama_aman = os.path.basename(foto_lama) if foto_lama else ""
+    if foto_lama_aman and foto_lama_aman != nama_file_baru:
+        path_lama = os.path.join(FOLDER_IMG, foto_lama_aman)
         if os.path.exists(path_lama):
             try:
                 os.remove(path_lama)
@@ -384,14 +446,17 @@ def login():
     if request.method == "POST":
         username = request.form.get("username", "").strip().lower()
         pin = request.form.get("pin", "").strip()
-        role = cek_kredensial(username, pin)
+        role, pin_sig = cek_kredensial(username, pin)
 
         if role:
             reset_kegagalan_login(ip)
+            session.clear()
             session.permanent = True
             session["username"] = username
             session["role"] = role
+            session["pin_sig"] = pin_sig
             session["csrf_token"] = secrets.token_hex(32)
+            catat_audit("LOGIN_SUKSES", f"Masuk sebagai {role}", username=username)
             return redirect(url_for("index"))
         else:
             time.sleep(0.5)  # Jeda mikro untuk memperlambat skrip otomatis
@@ -535,15 +600,41 @@ def api_simpan_produk():
         produk_id = request.form.get("id", "").strip()
         nama = request.form.get("nama", "").strip()
         kategori = request.form.get("kategori", "").strip()
-        harga_beli = int(float(request.form.get("harga_beli", 0) or 0))
-        harga_jual = int(float(request.form.get("harga_jual", 0) or 0))
-        stok = int(float(request.form.get("stok", 0) or 0))
         satuan = request.form.get("satuan", "pcs").strip() or "pcs"
         expired_date = request.form.get("expired_date", "").strip()
         foto_lama = request.form.get("gambar_lama", "").strip()
 
         if not nama:
             return jsonify({"ok": False, "pesan": "Nama produk wajib diisi"}), 400
+
+        try:
+            harga_beli = int(float(request.form.get("harga_beli", 0) or 0))
+            harga_jual = int(float(request.form.get("harga_jual", 0) or 0))
+            stok = int(float(request.form.get("stok", 0) or 0))
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "pesan": "Harga dan stok harus berupa angka yang valid"}), 400
+
+        if harga_beli < 0 or harga_jual < 0 or stok < 0:
+            return jsonify({"ok": False, "pesan": "Harga modal, harga jual, dan stok tidak boleh negatif"}), 400
+
+        # Cek nama produk duplikat (abaikan produk itu sendiri saat mode edit)
+        if produk_id:
+            pid = int(produk_id)
+            duplikat = conn.execute(
+                "SELECT id FROM produk WHERE LOWER(nama) = LOWER(?) AND id != ?",
+                (nama, pid)
+            ).fetchone()
+        else:
+            duplikat = conn.execute(
+                "SELECT id FROM produk WHERE LOWER(nama) = LOWER(?)",
+                (nama,)
+            ).fetchone()
+
+        if duplikat:
+            return jsonify({
+                "ok": False,
+                "pesan": f"Produk '{nama}' sudah ada! Gunakan nama lebih spesifik (misal ukuran/varian)."
+            }), 400
 
         if kategori:
             conn.execute("INSERT OR IGNORE INTO kategori (nama) VALUES (?)", (kategori,))
@@ -554,7 +645,9 @@ def api_simpan_produk():
         if produk_id:
             pid = int(produk_id)
             lama = conn.execute("SELECT stok FROM produk WHERE id = ?", (pid,)).fetchone()
-            stok_lama = lama["stok"] if lama else 0
+            if not lama:
+                return jsonify({"ok": False, "pesan": "Produk tidak ditemukan"}), 404
+            stok_lama = lama["stok"]
 
             conn.execute("""
                 UPDATE produk
@@ -563,7 +656,6 @@ def api_simpan_produk():
             """, (nama, kategori, harga_beli, harga_jual, stok, satuan, nama_gambar, expired_date, pid))
             conn.commit()
 
-            # Smart Restock: catat jika stok bertambah saat edit
             if stok > stok_lama:
                 catat_restock(pid, stok - stok_lama, harga_beli)
 
@@ -585,6 +677,8 @@ def api_simpan_produk():
             "id_terbaru": id_terbaru,
             "pesan": f"Produk '{nama}' berhasil disimpan"
         })
+    except ValueError as e:
+        return jsonify({"ok": False, "pesan": str(e)}), 400
     except Exception as e:
         return jsonify({"ok": False, "pesan": str(e)}), 500
 
@@ -593,18 +687,30 @@ def api_simpan_produk():
 @login_required
 @admin_required
 def api_hapus_produk(produk_id):
+    conn = db.get_connection()
     try:
-        conn = db.get_connection()
-        row = conn.execute("SELECT gambar FROM produk WHERE id = ?", (produk_id,)).fetchone()
-        if row and row["gambar"]:
-            path_foto = os.path.join(FOLDER_IMG, row["gambar"])
-            if os.path.exists(path_foto):
-                os.remove(path_foto)
+        row = conn.execute("SELECT nama, gambar FROM produk WHERE id = ?", (produk_id,)).fetchone()
+        if not row:
+            return jsonify({"ok": False, "pesan": "Produk tidak ditemukan"}), 404
+
+        nama_produk = row["nama"]
+        gambar_produk = row["gambar"]
 
         conn.execute("DELETE FROM produk WHERE id = ?", (produk_id,))
         conn.commit()
+
+        if gambar_produk:
+            path_foto = os.path.join(FOLDER_IMG, os.path.basename(gambar_produk))
+            if os.path.exists(path_foto):
+                try:
+                    os.remove(path_foto)
+                except OSError:
+                    pass
+
+        catat_audit("HAPUS_PRODUK", f"Menghapus produk '{nama_produk}' (ID #{produk_id})")
         return jsonify({"ok": True})
     except Exception as e:
+        conn.rollback()
         return jsonify({"ok": False, "pesan": str(e)}), 500
 
 
@@ -676,13 +782,34 @@ def api_barang_masuk():
 def api_buat_transaksi():
     data = request.get_json(silent=True) or {}
     items = data.get("items", [])
-    bayar = int(float(data.get("bayar", 0) or 0))
 
-    if not items:
+    if not isinstance(items, list) or not items:
         return jsonify({"ok": False, "pesan": "Keranjang masih kosong"}), 400
 
     try:
-        conn = db.get_connection()
+        bayar = int(float(data.get("bayar", 0) or 0))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "pesan": "Nominal pembayaran tidak valid"}), 400
+
+    if bayar < 0:
+        return jsonify({"ok": False, "pesan": "Nominal pembayaran tidak boleh negatif"}), 400
+
+    # Validasi jumlah >= 1 dan gabungkan jika ada produk_id ganda dalam satu request
+    qty_per_produk = {}
+    for item in items:
+        try:
+            pid = int(item.get("produk_id", 0))
+            qty = int(item.get("jumlah", 0))
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "pesan": "Data item keranjang tidak valid"}), 400
+
+        if pid <= 0 or qty < 1:
+            return jsonify({"ok": False, "pesan": "Jumlah pembelian tiap barang minimal 1"}), 400
+
+        qty_per_produk[pid] = qty_per_produk.get(pid, 0) + qty
+
+    conn = db.get_connection()
+    try:
         cur = conn.cursor()
         tanggal = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -690,14 +817,12 @@ def api_buat_transaksi():
         total_profit = 0
         detail_siap = []
 
-        for item in items:
-            pid = int(item["produk_id"])
-            qty = int(item["jumlah"])
+        for pid, qty in qty_per_produk.items():
             prod = cur.execute("SELECT * FROM produk WHERE id = ?", (pid,)).fetchone()
             if not prod:
                 return jsonify({"ok": False, "pesan": f"Produk ID {pid} tidak ditemukan"}), 400
             if prod["stok"] < qty:
-                return jsonify({"ok": False, "pesan": f"Stok '{prod['nama']}' tidak mencukupi"}), 400
+                return jsonify({"ok": False, "pesan": f"Stok '{prod['nama']}' tidak mencukupi (sisa {prod['stok']})"}), 400
 
             harga_beli = float(prod["harga_beli"] or 0)
             harga_jual = float(prod["harga_jual"] or 0)
@@ -749,7 +874,7 @@ def api_buat_transaksi():
                 d["harga_beli"], d["harga_satuan"], d["jumlah"], d["subtotal"]
             ))
             cur.execute(
-                "UPDATE produk SET stok = MAX(0, stok - ?) WHERE id = ?",
+                "UPDATE produk SET stok = stok - ? WHERE id = ?",
                 (d["jumlah"], d["produk_id"])
             )
 
@@ -768,6 +893,7 @@ def api_buat_transaksi():
             }
         })
     except Exception as e:
+        conn.rollback()
         return jsonify({"ok": False, "pesan": str(e)}), 500
 
 
@@ -865,8 +991,13 @@ def api_detail_transaksi(trx_id):
 @admin_required
 def api_retur_transaksi(trx_id):
     """Membatalkan transaksi dan mengembalikan stok produk."""
+    conn = db.get_connection()
     try:
-        conn = db.get_connection()
+        trx = conn.execute("SELECT * FROM transaksi WHERE id = ?", (trx_id,)).fetchone()
+        if not trx:
+            return jsonify({"ok": False, "pesan": "Transaksi tidak ditemukan atau sudah dibatalkan"}), 404
+
+        nominal = float(dict(trx).get("total", dict(trx).get("total_harga", 0)) or 0)
         items = conn.execute(
             "SELECT produk_id, jumlah FROM transaksi_detail WHERE transaksi_id = ?",
             (trx_id,)
@@ -881,9 +1012,23 @@ def api_retur_transaksi(trx_id):
         conn.execute("DELETE FROM transaksi_detail WHERE transaksi_id = ?", (trx_id,))
         conn.execute("DELETE FROM transaksi WHERE id = ?", (trx_id,))
         conn.commit()
+
+        catat_audit("RETUR_TRANSAKSI", f"Membatalkan transaksi #{trx_id} (Rp {int(nominal):,})")
         return jsonify({"ok": True, "pesan": f"Transaksi #{trx_id} dibatalkan & stok dikembalikan"})
     except Exception as e:
+        conn.rollback()
         return jsonify({"ok": False, "pesan": str(e)}), 500
+
+
+@app.route("/api/audit_log", methods=["GET"])
+@login_required
+@admin_required
+def api_audit_log():
+    conn = db.get_connection()
+    rows = conn.execute(
+        "SELECT id, tanggal, username, aksi, detail FROM audit_log ORDER BY id DESC LIMIT 50"
+    ).fetchall()
+    return jsonify({"logs": [dict(r) for r in rows]})
 
 
 # ==================== API DASHBOARD ANALITIK (KHUSUS ADMIN) ====================
@@ -1001,6 +1146,11 @@ def api_ubah_pin():
     conn.execute("UPDATE users SET pin = ? WHERE username = ?", (pin_baru_hash, target_user))
     conn.commit()
 
+    if target_user == session.get("username"):
+        session["pin_sig"] = pin_baru_hash[:24]
+
+    catat_audit("UBAH_PIN", f"Mengubah PIN untuk akun '{target_user}'")
+
     return jsonify({
         "ok": True,
         "pesan": f"PIN untuk akun '{target_user}' berhasil diperbarui!",
@@ -1079,4 +1229,4 @@ def api_backup_full():
                 pass
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    app.run(host="0.0.0.0", port=5000, debug=False)
