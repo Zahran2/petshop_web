@@ -8,6 +8,7 @@ from flask import (
     Flask, render_template, request, jsonify,
     send_from_directory, session, redirect, url_for
 )
+from werkzeug.security import generate_password_hash, check_password_hash
 from PIL import Image, ImageOps
 import db
 
@@ -116,6 +117,18 @@ if hasattr(db, "init_db"):
     db.init_db()
 
 
+def is_pin_hashed(pin_str):
+    return isinstance(pin_str, str) and pin_str.startswith(("scrypt:", "pbkdf2:"))
+
+
+def verifikasi_pin_db(pin_tersimpan, pin_input):
+    if not pin_tersimpan or not pin_input:
+        return False
+    if is_pin_hashed(pin_tersimpan):
+        return check_password_hash(pin_tersimpan, pin_input)
+    return pin_tersimpan == pin_input
+
+
 def inisialisasi_skema_lengkap():
     """Memastikan seluruh tabel dan kolom fitur lengkap tersedia tanpa menghapus data lama."""
     conn = db.get_connection()
@@ -131,8 +144,14 @@ def inisialisasi_skema_lengkap():
     """)
     cur.execute("SELECT COUNT(*) FROM users")
     if cur.fetchone()[0] == 0:
-        cur.execute("INSERT INTO users (username, pin, role) VALUES ('admin', '1234', 'admin')")
-        cur.execute("INSERT INTO users (username, pin, role) VALUES ('kasir', '0000', 'kasir')")
+        cur.execute(
+            "INSERT INTO users (username, pin, role) VALUES (?, ?, ?)",
+            ("admin", generate_password_hash("1234"), "admin")
+        )
+        cur.execute(
+            "INSERT INTO users (username, pin, role) VALUES (?, ?, ?)",
+            ("kasir", generate_password_hash("0000"), "kasir")
+        )
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS kategori (
@@ -202,7 +221,23 @@ def inisialisasi_skema_lengkap():
     conn.commit()
 
 
+def migrasi_hash_pin():
+    """Otomatis mengenkripsi PIN lama yang masih berbentuk teks biasa di database."""
+    conn = db.get_connection()
+    rows = conn.execute("SELECT id, pin FROM users").fetchall()
+    ada_perubahan = False
+    for r in rows:
+        pin_lama = str(r["pin"] or "")
+        if pin_lama and not is_pin_hashed(pin_lama):
+            pin_hash = generate_password_hash(pin_lama)
+            conn.execute("UPDATE users SET pin = ? WHERE id = ?", (pin_hash, r["id"]))
+            ada_perubahan = True
+    if ada_perubahan:
+        conn.commit()
+
+
 inisialisasi_skema_lengkap()
+migrasi_hash_pin()
 
 
 def get_table_columns(table_name):
@@ -212,14 +247,14 @@ def get_table_columns(table_name):
 
 
 def cek_kredensial(username, pin):
-    if hasattr(db, "verifikasi_login"):
-        return db.verifikasi_login(username, pin)
     conn = db.get_connection()
     user = conn.execute(
-        "SELECT role FROM users WHERE username = ? AND pin = ?",
-        (username, pin)
+        "SELECT pin, role FROM users WHERE username = ?",
+        (username,)
     ).fetchone()
-    return user["role"] if user else None
+    if user and verifikasi_pin_db(user["pin"], pin):
+        return user["role"]
+    return None
 
 
 def login_required(f):
@@ -341,8 +376,8 @@ def cek_status_pin_default():
     admin_row = conn.execute("SELECT pin FROM users WHERE username = 'admin'").fetchone()
     kasir_row = conn.execute("SELECT pin FROM users WHERE username = 'kasir'").fetchone()
     return {
-        "admin_default": bool(admin_row and admin_row["pin"] == "1234"),
-        "kasir_default": bool(kasir_row and kasir_row["pin"] == "0000"),
+        "admin_default": bool(admin_row and verifikasi_pin_db(admin_row["pin"], "1234")),
+        "kasir_default": bool(kasir_row and verifikasi_pin_db(kasir_row["pin"], "0000")),
     }
 
 @app.route("/")
@@ -918,10 +953,11 @@ def api_ubah_pin():
 
     conn = db.get_connection()
     admin_row = conn.execute("SELECT pin FROM users WHERE username = 'admin'").fetchone()
-    if not admin_row or admin_row["pin"] != pin_admin_lama:
+    if not admin_row or not verifikasi_pin_db(admin_row["pin"], pin_admin_lama):
         return jsonify({"ok": False, "pesan": "PIN Admin saat ini salah!"}), 403
 
-    conn.execute("UPDATE users SET pin = ? WHERE username = ?", (pin_baru, target_user))
+    pin_baru_hash = generate_password_hash(pin_baru)
+    conn.execute("UPDATE users SET pin = ? WHERE username = ?", (pin_baru_hash, target_user))
     conn.commit()
 
     return jsonify({
