@@ -1,5 +1,6 @@
 import os
 import time
+import secrets
 import inspect
 from datetime import datetime, timedelta
 from functools import wraps
@@ -10,11 +11,38 @@ from flask import (
 from PIL import Image, ImageOps
 import db
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def muat_atau_buat_secret_key():
+    """Membaca secret key dari file tersembunyi, atau membuat kunci acak 256-bit baru."""
+    path_kunci = os.path.join(BASE_DIR, ".secret_key")
+    if os.path.exists(path_kunci):
+        with open(path_kunci, "r", encoding="utf-8") as f:
+            kunci = f.read().strip()
+            if len(kunci) >= 32:
+                return kunci
+
+    kunci_baru = secrets.token_hex(32)
+    with open(path_kunci, "w", encoding="utf-8") as f:
+        f.write(kunci_baru)
+    try:
+        os.chmod(path_kunci, 0o600)
+    except OSError:
+        pass
+    return kunci_baru
+
+
 app = Flask(__name__)
-app.secret_key = "petshop-kunci-rahasia-aman-2026"
+app.secret_key = muat_atau_buat_secret_key()
 app.permanent_session_lifetime = timedelta(days=30)
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# Pengamanan cookie sesi
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SECURE=("PYTHONANYWHERE_DOMAIN" in os.environ)
+)
 FOLDER_IMG = os.path.join(BASE_DIR, "img_produk")
 os.makedirs(FOLDER_IMG, exist_ok=True)
 
