@@ -1,12 +1,17 @@
+import io
 import os
 import time
+import sqlite3
+import zipfile
+import tempfile
 import secrets
 import inspect
 from datetime import datetime, timedelta
 from functools import wraps
 from flask import (
     Flask, render_template, request, jsonify,
-    send_from_directory, session, redirect, url_for
+    send_from_directory, send_file, after_this_request,
+    session, redirect, url_for
 )
 from werkzeug.security import generate_password_hash, check_password_hash
 from PIL import Image, ImageOps
@@ -1001,6 +1006,77 @@ def api_ubah_pin():
         "pesan": f"PIN untuk akun '{target_user}' berhasil diperbarui!",
         "pin_status": cek_status_pin_default()
     })
+
+# ==================== API KEAMANAN: BACKUP DATABASE & FOTO ====================
+
+@app.route("/api/backup/db", methods=["GET"])
+@login_required
+@admin_required
+def api_backup_db():
+    """Membuat snapshot atomik database SQLite dan mengunduhnya sebagai file .db."""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+    fd, temp_db = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
+
+    src_conn = db.get_connection()
+    dst_conn = sqlite3.connect(temp_db)
+    src_conn.backup(dst_conn)
+    dst_conn.close()
+
+    @after_this_request
+    def hapus_temp_db(response):
+        if os.path.exists(temp_db):
+            try:
+                os.remove(temp_db)
+            except OSError:
+                pass
+        return response
+
+    return send_file(
+        temp_db,
+        mimetype="application/x-sqlite3",
+        as_attachment=True,
+        download_name=f"petshop_backup_{timestamp}.db"
+    )
+
+
+@app.route("/api/backup/full", methods=["GET"])
+@login_required
+@admin_required
+def api_backup_full():
+    """Mengemas snapshot database dan seluruh folder img_produk menjadi satu file .zip."""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+    fd, temp_db = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
+
+    try:
+        src_conn = db.get_connection()
+        dst_conn = sqlite3.connect(temp_db)
+        src_conn.backup(dst_conn)
+        dst_conn.close()
+
+        mem_zip = io.BytesIO()
+        with zipfile.ZipFile(mem_zip, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.write(temp_db, arcname="petshop.db")
+            if os.path.exists(FOLDER_IMG):
+                for nama_file in os.listdir(FOLDER_IMG):
+                    full_path = os.path.join(FOLDER_IMG, nama_file)
+                    if os.path.isfile(full_path):
+                        zf.write(full_path, arcname=os.path.join("img_produk", nama_file))
+
+        mem_zip.seek(0)
+        return send_file(
+            mem_zip,
+            mimetype="application/zip",
+            as_attachment=True,
+            download_name=f"Backup_Petshop_Lengkap_{timestamp}.zip"
+        )
+    finally:
+        if os.path.exists(temp_db):
+            try:
+                os.remove(temp_db)
+            except OSError:
+                pass
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)
