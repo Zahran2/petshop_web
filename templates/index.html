@@ -338,8 +338,8 @@
           <span>Kembalian:</span>
           <span id="teks-kembalian" class="text-emerald-600">Rp 0</span>
         </div>
-        <button onclick="prosesBayar()"
-                class="w-full bg-amber-600 hover:bg-amber-700 text-white font-bold py-3 rounded-xl shadow">
+        <button id="btn-proses-bayar" onclick="prosesBayar()"
+                class="w-full bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white font-bold py-3 rounded-xl shadow">
           Selesaikan Transaksi
         </button>
       </div>
@@ -850,24 +850,45 @@
       document.getElementById('teks-kembalian').textContent = formatRp(kembali);
     }
 
+    let sedangProsesBayar = false;
+
     async function prosesBayar() {
+      if (sedangProsesBayar) return;
+
       const totalRp = cart.reduce((s, i) => s + (i.harga_satuan * i.jumlah), 0);
       const bayar = Number(document.getElementById('input-bayar').value || 0);
       if (bayar < totalRp) return alert('Uang pembayaran kurang!');
 
-      const res = await fetch('/api/transaksi', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ items: cart, bayar })
-      });
-      const hasil = await res.json();
-      if (hasil.ok) {
-        cart = [];
-        updateBarKeranjang();
-        muatKasir();
-        tampilkanStruk(hasil.struk);
-      } else {
-        alert('Gagal: ' + hasil.pesan);
+      const btn = document.getElementById('btn-proses-bayar');
+      sedangProsesBayar = true;
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Memproses...';
+      }
+
+      try {
+        const res = await fetch('/api/transaksi', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ items: cart, bayar })
+        });
+        const hasil = await res.json();
+        if (hasil.ok) {
+          cart = [];
+          updateBarKeranjang();
+          muatKasir();
+          tampilkanStruk(hasil.struk);
+        } else {
+          alert('Gagal: ' + hasil.pesan);
+        }
+      } catch (err) {
+        alert('Koneksi terputus. Periksa jaringan lalu coba lagi.');
+      } finally {
+        sedangProsesBayar = false;
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = 'Selesaikan Transaksi';
+        }
       }
     }
 
