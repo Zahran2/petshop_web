@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Ganti PIN - Petshop</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-stone-100 min-h-screen flex items-center justify-center p-4">
+
+  <div class="bg-white w-full max-w-sm rounded-3xl shadow-md border border-stone-200 p-6 space-y-5">
+    <div class="text-center space-y-1">
+      <div class="text-4xl">🔐</div>
+      <h1 class="text-xl font-bold text-stone-800">Ganti PIN</h1>
+      {% if wajib %}
+      <p class="text-xs text-stone-600">
+        Akun <b>{{ username }}</b> masih memakai PIN bawaan. Buat PIN baru untuk melanjutkan.
+      </p>
+      {% else %}
+      <p class="text-xs text-stone-500">Ubah PIN untuk akun <b>{{ username }}</b>.</p>
+      {% endif %}
+    </div>
+
+    {% if error %}
+    <div class="bg-red-50 border border-red-200 text-red-700 text-xs font-semibold px-3.5 py-2.5 rounded-xl text-center">
+      {{ error }}
+    </div>
+    {% endif %}
+
+    <form method="POST" action="{{ url_for('ganti_pin_saya') }}" class="space-y-4">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+
+      <div>
+        <label for="pin-lama" class="block text-xs font-semibold text-stone-600 mb-1">PIN saat ini</label>
+        <input id="pin-lama" type="password" name="pin_lama" inputmode="numeric" autocomplete="current-password" required
+               class="w-full border border-stone-300 rounded-xl px-3.5 py-3 text-base tracking-widest focus:outline-none focus:border-amber-500" />
+      </div>
+
+      <div>
+        <label for="pin-baru" class="block text-xs font-semibold text-stone-600 mb-1">PIN baru (4–6 angka)</label>
+        <input id="pin-baru" type="password" name="pin_baru" inputmode="numeric" autocomplete="new-password"
+               minlength="4" maxlength="6" pattern="[0-9]{4,6}" required
+               class="w-full border border-stone-300 rounded-xl px-3.5 py-3 text-base tracking-widest focus:outline-none focus:border-amber-500" />
+      </div>
+
+      <div>
+        <label for="pin-konfirmasi" class="block text-xs font-semibold text-stone-600 mb-1">Ulangi PIN baru</label>
+        <input id="pin-konfirmasi" type="password" name="pin_konfirmasi" inputmode="numeric" autocomplete="new-password"
+               minlength="4" maxlength="6" pattern="[0-9]{4,6}" required
+               class="w-full border border-stone-300 rounded-xl px-3.5 py-3 text-base tracking-widest focus:outline-none focus:border-amber-500" />
+      </div>
+
+      <button type="submit"
+              class="w-full bg-amber-600 hover:bg-amber-700 active:scale-[0.99] text-white font-bold py-3 rounded-xl text-sm shadow">
+        SIMPAN PIN BARU
+      </button>
+    </form>
+
+    <div class="text-center">
+      <button type="button" onclick="keluar()" class="text-xs text-stone-500 hover:underline">Keluar</button>
+    </div>
+  </div>
+
+  <script>
+    async function keluar() {
+      try {
+        await fetch('/logout', { method: 'POST', headers: { 'X-CSRF-Token': '{{ csrf_token }}' } });
+      } finally {
+        window.location.href = '/login';
+      }
+    }
+  </script>
+</body>
+</html>
