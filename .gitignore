@@ -2,6 +2,8 @@
 .secret_key
 .env
 *.db
+*.db-shm
+*.db-wal
 *.sqlite
 *.sqlite3
 *_backup*

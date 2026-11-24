@@ -325,8 +325,9 @@
         </div>
         <div>
           <label class="text-xs text-stone-500">Uang Diterima (Rp)</label>
-          <input id="input-bayar" type="number" min="0" oninput="hitungKembalian()"
-            class="w-full border border-stone-300 rounded-xl px-3.5 py-2.5 text-lg font-bold mt-1" />
+          <input id="input-bayar" type="text" inputmode="numeric"
+                 oninput="formatInputRibuan(this); hitungKembalian()"
+                 class="w-full border border-stone-300 rounded-xl px-3.5 py-2.5 text-lg font-bold mt-1" />
           <div class="grid grid-cols-4 gap-1.5 mt-2">
             <button onclick="setUangPas()" class="bg-amber-100 text-amber-800 py-2 rounded-lg text-xs font-bold">Uang Pas</button>
             <button onclick="setUang(20000)" class="bg-stone-100 py-2 rounded-lg text-xs font-semibold">20.000</button>
@@ -415,13 +416,15 @@
         <div class="grid grid-cols-2 gap-2.5">
           <div>
             <label class="text-xs font-semibold text-stone-600">Harga Modal / Beli (Rp)</label>
-            <input type="number" name="harga_beli" id="prod-beli" min="0" value="0"
-              class="w-full border border-stone-300 rounded-xl px-3 py-2.5 text-sm mt-1" />
+            <input type="text" inputmode="numeric" name="harga_beli" id="prod-beli" value="0"
+                   oninput="formatInputRibuan(this)"
+                   class="w-full border border-stone-300 rounded-xl px-3 py-2.5 text-sm mt-1" />
           </div>
           <div>
             <label class="text-xs font-semibold text-stone-600">Harga Jual (Rp) *</label>
-            <input type="number" name="harga_jual" id="prod-jual" min="0" required
-              class="w-full border border-stone-300 rounded-xl px-3 py-2.5 text-sm mt-1" />
+            <input type="text" inputmode="numeric" name="harga_jual" id="prod-jual" required
+                   oninput="formatInputRibuan(this)"
+                   class="w-full border border-stone-300 rounded-xl px-3 py-2.5 text-sm mt-1" />
           </div>
         </div>
 
@@ -573,6 +576,7 @@
       const response = await _nativeFetch(resource, options);
       if (url.startsWith('/api/') && response.status === 401) {
         window.location.href = '/login';
+        return new Promise(() => {});
       }
       return response;
     };
@@ -623,9 +627,30 @@
 
     const formatRp = (angka) => 'Rp ' + Number(angka || 0).toLocaleString('id-ID');
 
-    function konfirmasiLogout() {
-      if (confirm("Yakin ingin keluar dari sistem?\nAnda harus memasukkan PIN lagi untuk masuk.")) {
-        window.location.href = "/logout";
+    function formatRibuan(angka) {
+      const bersih = String(angka ?? '').replace(/\D/g, '');
+      return bersih ? Number(bersih).toLocaleString('id-ID') : '';
+    }
+
+    function formatInputRibuan(el) {
+      const bersih = el.value.replace(/\D/g, '');
+      el.value = bersih ? Number(bersih).toLocaleString('id-ID') : '';
+    }
+
+    function parseRibuan(teks) {
+      const bersih = String(teks ?? '').replace(/\D/g, '');
+      return bersih ? Number(bersih) : 0;
+    }
+
+    async function konfirmasiLogout() {
+      if (!confirm("Yakin ingin keluar dari sistem?\nAnda harus memasukkan PIN lagi untuk masuk.")) return;
+      try {
+        await fetch("/logout", {
+          method: "POST",
+          headers: { "X-CSRF-Token": CSRF_TOKEN }
+        });
+      } finally {
+        window.location.href = "/login";
       }
     }
 
@@ -694,34 +719,51 @@
       muatKasir();
     }
 
+    let reqIdKasir = 0;
+
     async function cekEnterKasir(e) {
       if (e.key !== 'Enter') return;
       e.preventDefault();
       clearTimeout(timerKasir);
       pageKasir = 1;
+      const inp = document.getElementById('cari-kasir');
+      const kataKunci = inp.value.trim();
+
       await muatKasir();
-      // Jika hasil pencarian tepat 1 barang & stok ada, langsung masuk keranjang!
-      if (produkKasir.length === 1 && produkKasir[0].stok > 0) {
-        tambahCart(produkKasir[0].id);
-        const inp = document.getElementById('cari-kasir');
-        inp.value = '';
-        muatKasir();
+
+      if (produkKasir.length === 1) {
+        if (produkKasir[0].stok > 0) {
+          tambahCart(produkKasir[0].id);
+          inp.value = '';
+          muatKasir();
+        } else {
+          alert(`Stok "${produkKasir[0].nama}" sedang habis!`);
+        }
+      } else if (kataKunci && produkKasir.length === 0) {
+        alert(`Produk "${kataKunci}" tidak ditemukan!`);
       }
     }
 
     async function muatKasir() {
+      const currentReqId = ++reqIdKasir;
       const q = document.getElementById('cari-kasir').value;
       const kat = document.getElementById('filter-kat-kasir').value;
       const url = `/api/produk?q=${encodeURIComponent(q)}&kategori=${encodeURIComponent(kat)}&page=${pageKasir}&limit=${LIMIT_KASIR}`;
       const res = await fetch(url);
-      if (res.status === 401) return window.location.href = "/login";
+      if (currentReqId !== reqIdKasir) return;
 
       const data = await res.json();
+      if (currentReqId !== reqIdKasir) return;
+
       produkKasir = data.produk || [];
       pageKasir = data.page || 1;
       totalPagesKasir = data.total_pages || 1;
       daftarKategoriLengkap = data.kategori_lengkap || [];
       sinkronDropdownKategori(data.kategori || []);
+
+      // Sinkronkan item keranjang yang ada di halaman ini. Item lain diperbarui
+      // otomatis saat kasir menekan "Selesaikan Transaksi" (lihat prosesBayar).
+      terapkanDataProduk(produkKasir);
 
       document.getElementById('info-page-kasir').textContent = `Hal ${pageKasir} / ${totalPagesKasir}`;
       document.getElementById('btn-prev-kasir').disabled = pageKasir <= 1;
@@ -755,19 +797,79 @@
     }
 
     // ==================== KERANJANG & PEMBAYARAN ====================
+    // Samakan item keranjang dengan data produk terbaru (nama, harga, stok).
+    //   lengkap = true  : daftarProduk berisi SEMUA item keranjang. Item yang tidak
+    //                     ditemukan dianggap sudah dihapus dari sistem.
+    //   lengkap = false : daftarProduk hanya sebagian (misalnya hasil pencarian).
+    //                     Item yang tidak ada di daftar dibiarkan apa adanya.
+    // Mengembalikan daftar perubahan yang perlu diketahui kasir.
+    function terapkanDataProduk(daftarProduk, lengkap = false) {
+      const peta = new Map(daftarProduk.map(p => [Number(p.id), p]));
+      const keranjangBaru = [];
+      const perubahan = [];
+
+      cart.forEach(item => {
+        const p = peta.get(Number(item.produk_id));
+
+        if (!p) {
+          if (lengkap) perubahan.push(`"${item.nama_produk}" sudah tidak ada di sistem dan dihapus dari keranjang`);
+          else keranjangBaru.push(item);
+          return;
+        }
+
+        const hargaBaru = Number(p.harga_jual);
+        const stokTersedia = Math.max(0, Number(p.stok));
+        const jumlahBaru = Math.min(item.jumlah, stokTersedia);
+
+        if (item.harga_satuan !== hargaBaru) {
+          perubahan.push(`Harga "${p.nama}" berubah dari ${formatRp(item.harga_satuan)} menjadi ${formatRp(hargaBaru)}`);
+        }
+        if (jumlahBaru < item.jumlah) {
+          perubahan.push(`Jumlah "${p.nama}" disesuaikan menjadi ${jumlahBaru} (stok tersisa ${stokTersedia})`);
+        }
+
+        if (jumlahBaru > 0) {
+          keranjangBaru.push({
+            ...item,
+            nama_produk: p.nama,
+            harga_satuan: hargaBaru,
+            stok_tersedia: stokTersedia,
+            jumlah: jumlahBaru,
+            satuan: p.satuan || 'pcs'
+          });
+        } else {
+          perubahan.push(`"${p.nama}" stoknya habis dan dihapus dari keranjang`);
+        }
+      });
+
+      cart = keranjangBaru;
+      updateBarKeranjang();
+      return perubahan;
+    }
+
     function tambahCart(id) {
       const prod = produkKasir.find(x => x.id === id);
       if (!prod) return;
       const ada = cart.find(x => x.produk_id === id);
       if (ada) {
-        if (ada.jumlah < prod.stok) ada.jumlah++;
+        if (ada.jumlah < prod.stok) {
+          ada.jumlah++;
+        } else {
+          alert(`Stok maksimal "${prod.nama}" hanya ${prod.stok} ${prod.satuan || 'pcs'}!`);
+          return;
+        }
       } else {
+        if (prod.stok <= 0) {
+          alert(`Stok "${prod.nama}" habis!`);
+          return;
+        }
         cart.push({
           produk_id: prod.id,
           nama_produk: prod.nama,
           harga_satuan: prod.harga_jual,
           jumlah: 1,
-          stok_tersedia: prod.stok
+          stok_tersedia: prod.stok,
+          satuan: prod.satuan || 'pcs'
         });
       }
       updateBarKeranjang();
@@ -776,9 +878,15 @@
     function ubahQty(id, delta) {
       const idx = cart.findIndex(x => x.produk_id === id);
       if (idx === -1) return;
-      cart[idx].jumlah += delta;
-      if (cart[idx].jumlah <= 0) cart.splice(idx, 1);
-      else if (cart[idx].jumlah > cart[idx].stok_tersedia) cart[idx].jumlah = cart[idx].stok_tersedia;
+      const target = cart[idx].jumlah + delta;
+      if (target <= 0) {
+        cart.splice(idx, 1);
+      } else if (target > cart[idx].stok_tersedia) {
+        alert(`Stok maksimal "${cart[idx].nama_produk}" hanya ${cart[idx].stok_tersedia} ${cart[idx].satuan || 'pcs'}!`);
+        return;
+      } else {
+        cart[idx].jumlah = target;
+      }
       updateBarKeranjang();
       renderIsiKeranjang();
     }
@@ -810,7 +918,7 @@
     function bukaModalKeranjang() {
       renderIsiKeranjang();
       const totalRp = cart.reduce((s, i) => s + (i.harga_satuan * i.jumlah), 0);
-      document.getElementById('input-bayar').value = totalRp;
+      document.getElementById('input-bayar').value = formatRibuan(totalRp);
       hitungKembalian();
       document.getElementById('modal-keranjang').classList.remove('hidden');
     }
@@ -836,16 +944,16 @@
 
     function setUangPas() {
       const totalRp = cart.reduce((s, i) => s + (i.harga_satuan * i.jumlah), 0);
-      document.getElementById('input-bayar').value = totalRp;
+      document.getElementById('input-bayar').value = formatRibuan(totalRp);
       hitungKembalian();
     }
     function setUang(nom) {
-      document.getElementById('input-bayar').value = nom;
+      document.getElementById('input-bayar').value = formatRibuan(nom);
       hitungKembalian();
     }
     function hitungKembalian() {
       const totalRp = cart.reduce((s, i) => s + (i.harga_satuan * i.jumlah), 0);
-      const bayar = Number(document.getElementById('input-bayar').value || 0);
+      const bayar = parseRibuan(document.getElementById('input-bayar').value);
       const kembali = Math.max(0, bayar - totalRp);
       document.getElementById('teks-kembalian').textContent = formatRp(kembali);
     }
@@ -853,20 +961,39 @@
     let sedangProsesBayar = false;
 
     async function prosesBayar() {
-      if (sedangProsesBayar) return;
-
-      const totalRp = cart.reduce((s, i) => s + (i.harga_satuan * i.jumlah), 0);
-      const bayar = Number(document.getElementById('input-bayar').value || 0);
-      if (bayar < totalRp) return alert('Uang pembayaran kurang!');
+      if (sedangProsesBayar || !cart.length) return;
 
       const btn = document.getElementById('btn-proses-bayar');
       sedangProsesBayar = true;
       if (btn) {
         btn.disabled = true;
-        btn.textContent = 'Memproses...';
+        btn.textContent = 'Mengecek harga...';
       }
 
       try {
+        // 1) Ambil harga & stok TERBARU untuk semua item keranjang sebelum bayar
+        const idProduk = cart.map(item => Number(item.produk_id)).join(',');
+        const resCek = await fetch(`/api/produk/terkini?ids=${idProduk}`);
+        const dataCek = await resCek.json();
+        if (!dataCek.ok) return alert('Gagal: ' + dataCek.pesan);
+
+        const perubahan = terapkanDataProduk(dataCek.produk || [], true);
+        if (perubahan.length) {
+          // Ada perubahan: tampilkan keranjang yang sudah diperbarui, kasir cek ulang dulu
+          renderIsiKeranjang();
+          hitungKembalian();
+          alert('Ada perubahan di keranjang sebelum pembayaran:\n\n• ' +
+            perubahan.join('\n• ') +
+            '\n\nPeriksa total baru, lalu tekan "Selesaikan Transaksi" lagi.');
+          return;
+        }
+
+        // 2) Tidak ada perubahan: validasi uang lalu kirim transaksi
+        const totalRp = cart.reduce((s, i) => s + (i.harga_satuan * i.jumlah), 0);
+        const bayar = parseRibuan(document.getElementById('input-bayar').value);
+        if (bayar < totalRp) return alert('Uang pembayaran kurang!');
+
+        if (btn) btn.textContent = 'Memproses...';
         const res = await fetch('/api/transaksi', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -942,15 +1069,19 @@
       if (!expStr) return null;
       const hariIni = new Date();
       hariIni.setHours(0, 0, 0, 0);
-      const tglExp = new Date(expStr);
-      const selisihHari = Math.ceil((tglExp - hariIni) / (1000 * 60 * 60 * 24));
+      const [y, m, d] = expStr.split('-').map(Number);
+      const tglExp = new Date(y, (m || 1) - 1, d || 1);
+      const selisihHari = Math.round((tglExp - hariIni) / (1000 * 60 * 60 * 24));
       if (selisihHari < 0) return { label: `EXPIRED (${expStr})`, cls: 'bg-red-100 text-red-700' };
       if (selisihHari <= 90) return { label: `Exp ${selisihHari} hari lagi (${expStr})`, cls: 'bg-amber-100 text-amber-800' };
       return { label: `Exp: ${expStr}`, cls: 'bg-stone-100 text-stone-500' };
     }
 
+    let reqIdStok = 0;
+
     async function muatStok(highlightId = null) {
       if (USER_ROLE !== 'admin') return;
+      const currentReqId = ++reqIdStok;
       const q = document.getElementById('cari-stok').value;
       const kat = document.getElementById('filter-kat-stok').value;
       const filterKhusus = document.getElementById('filter-khusus-stok').value;
@@ -958,7 +1089,11 @@
 
       const url = `/api/produk?q=${encodeURIComponent(q)}&kategori=${encodeURIComponent(kat)}&filter=${filterKhusus}&sort=${sort}`;
       const res = await fetch(url);
+      if (currentReqId !== reqIdStok) return;
+
       const data = await res.json();
+      if (currentReqId !== reqIdStok) return;
+
       produkStok = data.produk || [];
       daftarKategoriLengkap = data.kategori_lengkap || [];
       sinkronDropdownKategori(data.kategori || []);
@@ -1024,12 +1159,22 @@
       document.getElementById('prod-nama').value = p ? p.nama : '';
       document.getElementById('prod-kategori').value = p ? (p.kategori || '') : '';
       document.getElementById('prod-satuan').value = p ? (p.satuan || 'pcs') : 'pcs';
-      document.getElementById('prod-beli').value = p ? (p.harga_beli || 0) : 0;
-      document.getElementById('prod-jual').value = p ? p.harga_jual : '';
+      document.getElementById('prod-beli').value = p ? formatRibuan(p.harga_beli || 0) : '0';
+      document.getElementById('prod-jual').value = p ? formatRibuan(p.harga_jual) : '';
       document.getElementById('prod-stok').value = p ? p.stok : '';
       document.getElementById('prod-expired').value = p ? (p.expired_date || '') : '';
       document.getElementById('modal-produk').classList.remove('hidden');
       setTimeout(() => document.getElementById('prod-nama').focus(), 100);
+    }
+
+    // Atur status tombol simpan produk selama proses berlangsung
+    function setStatusTombolSimpan(sedangMenyimpan) {
+      const btn = document.getElementById('btn-simpan-produk');
+      const btnLagi = document.getElementById('btn-simpan-lagi');
+      btn.disabled = sedangMenyimpan;
+      btnLagi.disabled = sedangMenyimpan;
+      btn.textContent = sedangMenyimpan ? 'Menyimpan...' : 'Simpan';
+      btnLagi.textContent = sedangMenyimpan ? 'Menyimpan...' : 'Simpan & Tambah Lagi';
     }
 
     async function simpanProduk(e, tutupJendela = true) {
@@ -1037,50 +1182,71 @@
       const form = document.getElementById('form-produk');
       if (!form.reportValidity()) return;
 
-      const btn = document.getElementById('btn-simpan-produk');
-      const btnLagi = document.getElementById('btn-simpan-lagi');
-      btn.disabled = true;
-      btnLagi.disabled = true;
-      btn.textContent = 'Menyimpan...';
-
       const formData = new FormData(form);
+      const hargaBeliBersih = parseRibuan(formData.get('harga_beli'));
+      const hargaJualBersih = parseRibuan(formData.get('harga_jual'));
+      if (hargaJualBersih <= 0 && !confirm('Harga jual produk ini Rp 0. Lanjutkan simpan?')) return;
+
+      formData.set('harga_beli', String(hargaBeliBersih));
+      formData.set('harga_jual', String(hargaJualBersih));
       const namaBarang = formData.get('nama');
       const kategoriDipilih = formData.get('kategori');
       const satuanDipilih = formData.get('satuan');
 
-      const res = await fetch('/api/produk', { method: 'POST', body: formData });
-      const hasil = await res.json();
+      setStatusTombolSimpan(true);
 
-      btn.disabled = false;
-      btnLagi.disabled = false;
-      btn.textContent = 'Simpan';
+      // Tahap 1: kirim ke server. Kalau gagal di sini, produk BELUM tersimpan.
+      let hasil;
+      try {
+        const res = await fetch('/api/produk', { method: 'POST', body: formData });
+        hasil = await res.json();
+      } catch (err) {
+        console.error(err);
+        alert('Gagal menghubungi server (koneksi terputus atau foto terlalu besar). Periksa jaringan lalu coba lagi.');
+        setStatusTombolSimpan(false);
+        return;
+      }
 
-      if (hasil.ok) {
+      if (!hasil.ok) {
+        alert('Error: ' + (hasil.pesan || 'Gagal menyimpan produk'));
+        setStatusTombolSimpan(false);
+        return;
+      }
+
+      // Tahap 2: produk SUDAH tersimpan. Error di tahap ini tidak boleh dilaporkan sebagai
+      // "gagal simpan", supaya user tidak menyimpan ulang lalu kena error duplikat.
+      try {
         await muatStok(hasil.id_terbaru);
+
         if (tutupJendela) {
           tutupModal('modal-produk');
         } else {
-          // Simpan & Tambah Lagi: reset kolom isian tapi pertahankan kategori & satuan
+          // Mode "Simpan & Tambah Lagi": kosongkan isian, tapi pertahankan kategori & satuan
           form.reset();
           document.getElementById('prod-id').value = '';
           document.getElementById('prod-gambar-lama').value = '';
           document.getElementById('prod-kategori').value = kategoriDipilih;
           document.getElementById('prod-satuan').value = satuanDipilih;
-          document.getElementById('prod-beli').value = 0;
+          document.getElementById('prod-beli').value = '0';
 
           const banner = document.getElementById('banner-sukses-produk');
           banner.textContent = `✅ '${namaBarang}' berhasil masuk ke tabel stok! Silakan lanjut barang berikutnya.`;
           banner.classList.remove('hidden');
           document.getElementById('prod-nama').focus();
         }
-      } else {
-        alert('Error: ' + hasil.pesan);
+      } catch (err) {
+        console.error(err);
+        alert(`Produk '${namaBarang}' sudah tersimpan, tetapi daftar stok gagal dimuat. Muat ulang halaman untuk melihatnya.`);
+      } finally {
+        setStatusTombolSimpan(false);
       }
     }
 
     async function hapusProduk(id, nama) {
       if (!confirm(`Hapus produk "${nama}"?`)) return;
-      await fetch(`/api/produk/${id}`, { method: 'DELETE' });
+      const res = await fetch(`/api/produk/${id}`, { method: 'DELETE' });
+      const hasil = await res.json();
+      if (!hasil.ok) return alert('Gagal: ' + (hasil.pesan || 'Tidak dapat menghapus produk'));
       muatStok();
     }
 
@@ -1088,11 +1254,13 @@
     async function tambahKategoriCepat() {
       const namaBaru = prompt("Nama kategori baru (misal: Dry Food):");
       if (!namaBaru || !namaBaru.trim()) return;
-      await fetch('/api/kategori', {
+      const res = await fetch('/api/kategori', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ nama: namaBaru.trim() })
       });
+      const hasil = await res.json();
+      if (!hasil.ok) return alert('Gagal: ' + (hasil.pesan || 'Tidak dapat menambah kategori'));
       await muatStok();
       document.getElementById('prod-kategori').value = namaBaru.trim();
     }
@@ -1133,11 +1301,13 @@
       const inp = document.getElementById('input-kategori-baru');
       const nama = inp.value.trim();
       if (!nama) return;
-      await fetch('/api/kategori', {
+      const res = await fetch('/api/kategori', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ nama })
       });
+      const hasil = await res.json();
+      if (!hasil.ok) return alert('Gagal: ' + (hasil.pesan || 'Tidak dapat menambah kategori'));
       inp.value = '';
       await muatStok();
       renderListKategori();
@@ -1146,18 +1316,22 @@
     async function editKategori(id, namaLama) {
       const namaBaru = prompt(`Ubah nama kategori '${namaLama}':`, namaLama);
       if (!namaBaru || !namaBaru.trim() || namaBaru.trim() === namaLama) return;
-      await fetch(`/api/kategori/${id}`, {
+      const res = await fetch(`/api/kategori/${id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ nama: namaBaru.trim() })
       });
+      const hasil = await res.json();
+      if (!hasil.ok) return alert('Gagal: ' + (hasil.pesan || 'Tidak dapat mengubah kategori'));
       await muatStok();
       renderListKategori();
     }
 
     async function hapusKategori(id, nama) {
       if (!confirm(`Hapus kategori '${nama}'?`)) return;
-      await fetch(`/api/kategori/${id}`, { method: 'DELETE' });
+      const res = await fetch(`/api/kategori/${id}`, { method: 'DELETE' });
+      const hasil = await res.json();
+      if (!hasil.ok) return alert('Gagal: ' + (hasil.pesan || 'Tidak dapat menghapus kategori'));
       await muatStok();
       renderListKategori();
     }
@@ -1204,30 +1378,38 @@
         return;
       }
 
-      box.innerHTML = dataRiwayatTerakhir.map(t => `
-        <div class="bg-white p-3.5 rounded-2xl shadow-sm border border-stone-200 space-y-2">
+      box.innerHTML = dataRiwayatTerakhir.map(t => {
+        const isRetur = t.status === 'retur';
+        return `
+        <div class="${isRetur ? 'bg-red-50/60 border-red-200 opacity-80' : 'bg-white border-stone-200'} p-3.5 rounded-2xl shadow-sm border space-y-2">
           <div class="flex justify-between items-start">
             <div>
-              <div class="font-bold text-sm">Nota #${t.id}</div>
-              <div class="text-[11px] text-stone-400">${t.tanggal || ''}</div>
+              <div class="font-bold text-sm flex items-center gap-1.5">
+                <span>Nota #${Number(t.id)}</span>
+                ${isRetur ? '<span class="text-[10px] bg-red-100 text-red-700 px-2 py-0.5 rounded-full font-bold">DIBATALKAN</span>' : ''}
+              </div>
+              <div class="text-[11px] text-stone-400">${escapeHtml(t.tanggal || '')}</div>
             </div>
             <div class="text-right">
-              <div class="font-bold text-stone-800 text-sm">${formatRp(t.total_tampil)}</div>
-              <div class="text-[11px] font-semibold text-emerald-600">Profit: +${formatRp(t.profit_tampil)}</div>
+              <div class="font-bold ${isRetur ? 'line-through text-stone-400' : 'text-stone-800'} text-sm">${formatRp(t.total_tampil)}</div>
+              <div class="text-[11px] font-semibold ${isRetur ? 'text-red-500' : 'text-emerald-600'}">
+                ${isRetur ? 'Stok dikembalikan' : 'Profit: +' + formatRp(t.profit_tampil)}
+              </div>
             </div>
           </div>
           <div class="flex gap-2 pt-1 border-t border-stone-100">
-            <button onclick="lihatDetailStruk(${t.id})"
+            <button onclick="lihatDetailStruk(${Number(t.id)})"
                     class="flex-1 bg-stone-100 text-stone-700 py-1.5 rounded-lg text-xs font-semibold">
               🧾 Rincian & Struk
             </button>
-            <button onclick="returTransaksi(${t.id})"
+            ${isRetur ? '' : `
+            <button onclick="returTransaksi(${Number(t.id)})"
                     class="bg-red-50 text-red-600 px-3 py-1.5 rounded-lg text-xs font-semibold">
               ↩️ Batalkan (Retur)
-            </button>
+            </button>`}
           </div>
         </div>
-      `).join('');
+      `}).join('');
     }
 
     async function lihatDetailStruk(trxId) {
@@ -1289,7 +1471,15 @@
 
       const warnaBadge = {
         LOGIN_SUKSES: 'bg-emerald-100 text-emerald-700',
+        LOGOUT: 'bg-stone-200 text-stone-700',
+        LOGIN_TERKUNCI: 'bg-orange-100 text-orange-800',
         UBAH_PIN: 'bg-amber-100 text-amber-800',
+        UBAH_PIN_GAGAL: 'bg-red-100 text-red-700',
+        UBAH_PIN_TERKUNCI: 'bg-rose-200 text-rose-800',
+        UNDUH_BACKUP: 'bg-sky-100 text-sky-700',
+        TAMBAH_PRODUK: 'bg-teal-100 text-teal-700',
+        UBAH_PRODUK: 'bg-blue-100 text-blue-700',
+        KELOLA_KATEGORI: 'bg-indigo-100 text-indigo-700',
         RETUR_TRANSAKSI: 'bg-red-100 text-red-700',
         HAPUS_PRODUK: 'bg-rose-100 text-rose-700'
       };
@@ -1335,9 +1525,12 @@
 
     // ==================== EXPORT CSV (WYSIWYG) ====================
     function unduhCsv(namaFile, rows) {
-      const csvContent = "\uFEFF" + rows.map(r =>
-        r.map(val => `"${String(val ?? '').replace(/"/g, '""')}"`).join(",")
-      ).join("\n");
+      const amanSel = (val) => {
+        let s = String(val ?? '').replace(/"/g, '""');
+        if (/^[=+\-@]/.test(s)) s = "'" + s;
+        return `"${s}"`;
+      };
+      const csvContent = "\uFEFF" + rows.map(r => r.map(amanSel).join(",")).join("\n");
       const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -1384,30 +1577,34 @@
         pin_konfirmasi: document.getElementById('pin-konfirmasi').value
       };
 
-      const res = await fetch('/api/ubah_pin', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-      const hasil = await res.json();
+      try {
+        const res = await fetch('/api/ubah_pin', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const hasil = await res.json();
 
-      btn.disabled = false;
-      btn.textContent = 'Simpan PIN Baru';
-
-      if (hasil.ok) {
-        alert(hasil.pesan);
-        tutupModal('modal-pin');
-        const banner = document.getElementById('banner-pin-default');
-        if (banner && hasil.pin_status) {
-          if (!hasil.pin_status.admin_default && !hasil.pin_status.kasir_default) {
-            banner.remove();
-          } else {
-            const sisa = hasil.pin_status.admin_default ? 'admin (1234)' : 'kasir (0000)';
-            document.getElementById('teks-status-pin').innerHTML = `Akun <b>${sisa}</b> masih memakai PIN standar.`;
+        if (hasil.ok) {
+          alert(hasil.pesan);
+          tutupModal('modal-pin');
+          const banner = document.getElementById('banner-pin-default');
+          if (banner && hasil.pin_status) {
+            if (!hasil.pin_status.admin_default && !hasil.pin_status.kasir_default) {
+              banner.remove();
+            } else {
+              const sisa = hasil.pin_status.admin_default ? 'admin (1234)' : 'kasir (0000)';
+              document.getElementById('teks-status-pin').innerHTML = `Akun <b>${sisa}</b> masih memakai PIN standar.`;
+            }
           }
+        } else {
+          alert('Gagal: ' + (hasil.pesan || 'Gagal mengubah PIN'));
         }
-      } else {
-        alert('Gagal: ' + hasil.pesan);
+      } catch (err) {
+        alert('Koneksi terputus saat mengubah PIN. Periksa jaringan lalu coba lagi.');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Simpan PIN Baru';
       }
     }
 
